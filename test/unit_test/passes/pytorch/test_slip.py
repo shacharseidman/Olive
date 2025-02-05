@@ -6,11 +6,9 @@ import pytest
 import torch
 import json
 
-from olive.evaluator.metric import AccuracySubType, Metric, SubMetric
-from olive.evaluator.olive_evaluator import OliveEvaluatorConfig
 from olive.model import PyTorchModelHandler
-from olive.passes.pytorch.slip import SLIPOptimizer
 from olive.hardware.accelerator import AcceleratorSpec
+from olive.systems.system_config import SystemConfig
 
 class DummyEvaluator:
     def evaluate(self, model, metric):
@@ -29,7 +27,6 @@ class SimpleModel(torch.nn.Module):
         self.layer2 = torch.nn.Conv2d(6, 12, 3)
         self.relu2 = torch.nn.ReLU()
         self.pool2 = torch.nn.AdaptiveAvgPool2d((1, 1))
-        # Fully connected layer for binary classification (2 output classes)
         self.fc = torch.nn.Linear(12, 1)
 
     def forward(self, x):
@@ -81,9 +78,27 @@ def test_slip_optimizer_run_for_config(model_handler, partition_config_file, tmp
                     "input_types": ["float32"]
                 }
             }
-        }
+        },
+        "exposed_model_evaluator_system": SystemConfig.parse_obj({"type": "LocalSystem", "config": {}}),
+        # "exposed_model_evaluator_system": SystemConfig.parse_obj(
+        #     {
+        #         "type": "AzureML", 
+        #         "config": {
+        #             "azureml_client_config": {
+        #                 "subscription_id": "<subscription_id>",
+        #                 "resource_group": "<resource_group>",
+        #                 "workspace_name": "<workspace_name>",
+        #             },
+        #             "aml_compute": "<aml_compute_cluster_name>",
+        #             "aml_docker_config": {
+        #                 "base_image": "mcr.microsoft.com/azureml/openmpi4.1.0-ubuntu20.04:20240709.v1",
+        #                 "conda_file_path": "test/integ_test/aml_model_test/conda.yaml"
+        #             },
+        #         }
+        #     }),
     }
     accelerator_spec = AcceleratorSpec(accelerator_type="cpu")
+    from olive.passes.pytorch.slip import SLIPOptimizer
     optimizer = SLIPOptimizer(accelerator_spec=accelerator_spec, config=config)
     config['exposed_model_evaluator'] = optimizer._default_config(accelerator_spec)['exposed_model_evaluator'].default_value
 

@@ -6,26 +6,26 @@ from copy import deepcopy
 import logging
 import json
 from pathlib import Path
-from typing import Any, Dict, Union
+from typing import Any, Callable, Dict, Optional, Union
 
 import torch
 import re
 
 from olive.common.config_utils import ParamCategory
 from olive.evaluator.metric import AccuracySubType, Metric, SubMetric
+from olive.evaluator.metric_result import MetricResult, SubMetricResult
 from olive.evaluator.olive_evaluator import OliveEvaluator, OliveEvaluatorConfig
 from olive.hardware.accelerator import AcceleratorSpec
 from olive.model import CompositeModelHandler
+from olive.model.config.model_config import ModelConfig
 from olive.model.handler.hf import HfModelHandler
 from olive.model.handler.pytorch import PyTorchModelHandler
 from olive.model.utils.path_utils import normalize_path_suffix
 from olive.passes import Pass
 from olive.passes.pass_config import PassConfigParam
-from olive.passes.pytorch.common import inherit_pytorch_from_pytorch
-from olive.data.config import DataConfig  # newly added import
-
-# import sys, os
-# sys.path.append('../../../llm_ds')
+from olive.data.config import DataConfig
+from olive.systems.olive_system import OliveSystem
+from olive.systems.system_config import SystemConfig
 
 logger = logging.getLogger(__name__)
 
@@ -70,6 +70,12 @@ class SLIPOptimizer(Pass):
                 default_value=None,
                 description="Data configuration for evaluating the exposed model."
             ),
+            "exposed_model_evaluator_system": PassConfigParam(
+                type_=SystemConfig,
+                required=False,
+                default_value=None,
+                description="The OliveSystem where the evaluator will run if different from the pass system."
+            ),
             # "exposed_model_effectiveness_system": PassConfigParam(
             #     type_=SystemConfig,
             #     required=True,
@@ -112,8 +118,9 @@ class SLIPOptimizer(Pass):
         torch.save(pytorch_model, output_model_path)
         return PyTorchModelHandler(model_path=output_model_path)
     
-    def _find_best_partition_config(self, model: torch.nn.Module, model_partition_config: Dict, 
-                                    evaluator: OliveEvaluator, exposed_model_metric: Metric,
+    def _find_best_partition_config(self, model: torch.nn.Module, 
+                                    model_partition_config: Dict, 
+                                    eval_func: Callable[[Union[HfModelHandler, PyTorchModelHandler]], MetricResult],
                                     output_model_path: str) -> Dict:
         assert 'enum' in model_partition_config, "model_partition_config should have an 'enum' key"
         best_partition_config_key, best_metric_value = None, None
@@ -122,10 +129,11 @@ class SLIPOptimizer(Pass):
             exposed_pymodel = self._transform_into_exposed_model(model, partition_config)
             olive_model = self._transform_into_olive_model(partition_key, exposed_pymodel, output_model_path)
             logger.info(f"About to evaluate model partition config {partition_key}")
-            metric_results = evaluator.evaluate(olive_model, [exposed_model_metric])
+            metric_results = eval_func(olive_model)
             logger.info(f"Model partition config {partition_key} metric results: {metric_results}")
-            metric_value = metric_results.get_value(exposed_model_metric.name, exposed_model_metric.sub_types[0].name)
-            if exposed_model_metric.sub_types[0].higher_is_better:
+            submetric: SubMetricResult = list(metric_results.values())[0]
+            metric_value = submetric.value
+            if submetric.higher_is_better:
                 if best_metric_value is None or metric_value > best_metric_value:
                     logger.info(f"Found new best metric value {metric_value} for model partition config {partition_key}")
                     best_metric_value = metric_value
@@ -139,6 +147,23 @@ class SLIPOptimizer(Pass):
         logger.info(f"Best model partition config is {best_partition_config_key} with metric value {best_metric_value}")
         return model_partition_config['enum'][best_partition_config_key]
 
+    def _create_eval_proc(self, evaluator_config: OliveEvaluatorConfig, system_config: Optional[SystemConfig]) -> Callable[[Union[HfModelHandler, PyTorchModelHandler]], MetricResult]:
+        if system_config:
+            logger.info(f"Creating evaluator function with system {system_config}")
+            system: OliveSystem = system_config.create_system()
+            def evaluate_model_on_system(olive_model: Union[HfModelHandler, PyTorchModelHandler]) -> MetricResult:
+                new_model_config = ModelConfig.from_json(olive_model.to_json())
+                metric_results = system.evaluate_model(new_model_config, evaluator_config, self.accelerator_spec)
+                return metric_results
+            return evaluate_model_on_system
+        else:
+            logger.info(f"Creating standalone evaluator function with no system")
+            def evaluate_model_standalone(olive_model: Union[HfModelHandler, PyTorchModelHandler]) -> MetricResult:
+                evaluator: OliveEvaluator = evaluator_config.create_evaluator(olive_model)
+                metric_results = evaluator.evaluate(olive_model, evaluator_config.metrics)
+                return metric_results
+            return evaluate_model_standalone
+
     def _run_for_config(self, model: Union[HfModelHandler, PyTorchModelHandler], config: Dict[str, Any], output_model_path: str) -> CompositeModelHandler:
         if isinstance(model, PyTorchModelHandler):
             pytorch_model = model.load_model(cache_model=True)
@@ -151,19 +176,19 @@ class SLIPOptimizer(Pass):
         # evaluator_config = OliveEvaluatorConfig(**config["exposed_model_evaluator"])
         evaluator_config: OliveEvaluatorConfig = config["exposed_model_evaluator"]
         # Inject the data_config into the evaluator metric, if provided.
-        exposed_model_metric = evaluator_config.metrics[0]
+        assert len(evaluator_config.metrics) == 1, "Only one metric is supported for now"
         # Convert data_config dict to a DataConfig instance if necessary.
         data_config = self.config.get("data_config")
         if data_config and not isinstance(data_config, DataConfig):
             data_config = DataConfig(**data_config)
-        exposed_model_metric.data_config = data_config
+        evaluator_config.metrics[0].data_config = data_config
 
-        evaluator: OliveEvaluator = evaluator_config.create_evaluator(model)
-
+        system_config: Optional[SystemConfig] = config.get("exposed_model_evaluator_system")
+        evaluator_func = self._create_eval_proc(evaluator_config, system_config)
+        
         best_partition_config = self._find_best_partition_config(pytorch_model, 
                                                                  model_partition_config, 
-                                                                 evaluator, 
-                                                                 exposed_model_metric,
+                                                                 evaluator_func,
                                                                  output_model_path)
         return best_partition_config
 
