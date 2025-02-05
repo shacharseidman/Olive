@@ -174,7 +174,7 @@ class SLIPOptimizer(Pass):
 
         # exposed_model_system = config["exposed_model_system"]
         # evaluator_config = OliveEvaluatorConfig(**config["exposed_model_evaluator"])
-        evaluator_config: OliveEvaluatorConfig = config["exposed_model_evaluator"]
+        evaluator_config: OliveEvaluatorConfig = OliveEvaluatorConfig.parse_obj(config["exposed_model_evaluator"]) if isinstance(config["exposed_model_evaluator"], dict) else config["exposed_model_evaluator"]
         # Inject the data_config into the evaluator metric, if provided.
         assert len(evaluator_config.metrics) == 1, "Only one metric is supported for now"
         # Convert data_config dict to a DataConfig instance if necessary.
@@ -183,14 +183,17 @@ class SLIPOptimizer(Pass):
             data_config = DataConfig(**data_config)
         evaluator_config.metrics[0].data_config = data_config
 
-        system_config: Optional[SystemConfig] = config.get("exposed_model_evaluator_system")
+        system_config: Optional[SystemConfig] = SystemConfig.parse_obj(config.get("exposed_model_evaluator_system")) if isinstance(config.get("exposed_model_evaluator_system"), dict) else config.get("exposed_model_evaluator_system")
         evaluator_func = self._create_eval_proc(evaluator_config, system_config)
         
         best_partition_config = self._find_best_partition_config(pytorch_model, 
                                                                  model_partition_config, 
                                                                  evaluator_func,
                                                                  output_model_path)
-        return best_partition_config
+        if model.model_attributes is None:
+            model.model_attributes = {}
+        model.model_attributes['slip'] = {'best_partition': best_partition_config}
+        return model
 
         # hybrid_model_package = self._partition_model(pytorch_model, best_partition_config)
         # return hybrid_model_package

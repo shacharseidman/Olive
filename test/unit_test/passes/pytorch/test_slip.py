@@ -102,9 +102,12 @@ def test_slip_optimizer_run_for_config(model_handler, partition_config_file, tmp
     optimizer = SLIPOptimizer(accelerator_spec=accelerator_spec, config=config)
     config['exposed_model_evaluator'] = optimizer._default_config(accelerator_spec)['exposed_model_evaluator'].default_value
 
-    best_partition_config = optimizer._run_for_config(model_handler, config, str(tmp_path))
+    out_model = optimizer._run_for_config(model_handler, config, str(tmp_path))
+    best_partition_config = out_model.model_attributes['slip']
     assert best_partition_config == {
-        "layer_filter_channel": {
-            '0': {"name": "layer1.weight.0.0"}
+        "best_partition": {
+            "layer_filter_channel": {
+                '0': {"name": "layer1.weight.0.0"}
+            }
         }
     }

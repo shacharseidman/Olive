@@ -1,0 +1,23 @@
+{
+    "enum": {
+        "config1": {
+            "layer_filter_channel": {
+                "0": {"name": "layer1.0.conv1.weight.0.0"},
+                "1": {"name": "layer1.0.conv1.weight.0.1"},
+                "2": {"name": "layer2.0.conv1.weight.1.1"}
+            }
+        },
+        "config2": {
+            "layer_filter_channel": {
+                "0": {"name": "layer1.0.conv1.weight.2.2"},
+                "1": {"name": "layer1.0.conv1.weight.2.3"},
+                "2": {"name": "layer2.0.conv1.weight.3.3"},
+                "3": {"name": "layer2.0.conv1.weight.3.4"},
+                "4": {"name": "layer3.0.conv1.weight.4.4"},
+                "5": {"name": "layer3.0.conv1.weight.4.5"},
+                "6": {"name": "layer4.0.conv1.weight.5.5"},
+                "7": {"name": "layer4.0.conv1.weight.5.6"}
+            }
+        }
+    }
+}
